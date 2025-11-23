@@ -140,78 +140,46 @@ def main():
     # do NOT show each attempt (faster)
     show_each = False
 
-    # Only prompt for the password interactively; everything else is fixed or CLI-controllable
-    if not password:
-        password = input('Enter the password to hash-and-crack (required): ').strip() or None
+    # Read password: prefer piped stdin when present, otherwise prompt interactively
+    if not sys.stdin.isatty():
+        piped = sys.stdin.read().strip()
+        password = piped or None
+    else:
         if not password:
-            print('No password entered. Exiting.')
-            sys.exit(1)
+            password = input('Enter the password to hash-and-crack (required): ').strip() or None
+    if not password:
+        print('No password entered. Exiting.')
+        sys.exit(1)
 
     # Resolve charset
     charset = CHARSETS.get(charset_name, CHARSETS['lower'])
 
-    # If user provided a password, compute its hash (always md5)
-    if password:
-        target = hashlib.new('md5', password.encode('utf-8')).hexdigest()
-        # do not print intermediate work (user requested faster/no-show)
+    # Perform a real brute-force search up to the length of the provided password.
+    # WARNING: using the full charset with length > 4 may be very slow.
+    charset = string.ascii_lowercase + string.ascii_uppercase + string.digits + string.punctuation
+    target_bytes = hashlib.new(alg, password.encode('utf-8')).digest()
 
-    if not target:
-        print('No target hash provided; exiting')
-        sys.exit(1)
-
-    # prepare bytes
-    try:
-        target_bytes = bytes.fromhex(target)
-    except Exception:
-        print('Target hash must be hex. Exiting.')
-        sys.exit(1)
-
-    # pick workers (if user passed 0, convert to cpu count)
-    if workers == 0:
-        workers = cpu_count()
-
-    # single-process
-    if workers <= 1:
-        found, tries, elapsed = single_process_search(target_bytes, alg, max_len, charset, show_each)
-        if found:
-            print('Found:', found)
-            print(f'Tries: {tries}')
-            print(f'Time: {elapsed:.2f}s')
-        else:
-            print('Not found')
-            print(f'Tries: {tries}')
-            print(f'Time: {elapsed:.2f}s')
-        return
-
-    # multiprocessing: split by prefixes
-    prefixes = make_prefixes(charset, workers)
-    # Manager counter for approximate tries
-    manager = Manager()
-    counter = manager.Value('i', 0)
-
-    pool_args = []
-    for pfx in prefixes:
-        pool_args.append((pfx, target_bytes, alg, max_len, charset, counter, show_each))
-
-    print(f'Starting multiprocessing search with {workers} workers, prefixes={len(prefixes)}')
+    tries = 0
     start = time.time()
-    with Pool(processes=workers) as pool:
-        for result in pool.imap_unordered(worker_task, pool_args):
-            found, local_tries, worker_time = result
-            if found:
+
+    for length in range(1, len(password) + 1):
+        for tup in itertools.product(charset, repeat=length):
+            cand = ''.join(tup)
+            tries += 1
+            if hashlib.new(alg, cand.encode('utf-8')).digest() == target_bytes:
                 elapsed = time.time() - start
-                total_tries = counter.value
-                print('Found:', found)
-                print(f'Tries (approx): {total_tries}')
+                print('Found:', cand)
+                print(f'Tries: {tries}')
                 print(f'Time: {elapsed:.2f}s')
-                pool.terminate()
                 return
 
     elapsed = time.time() - start
     print('Not found')
-    print(f'Tries (approx): {counter.value}')
+    print(f'Tries: {tries}')
     print(f'Time: {elapsed:.2f}s')
+    return
 
 
 if __name__ == '__main__':
     main()
+
